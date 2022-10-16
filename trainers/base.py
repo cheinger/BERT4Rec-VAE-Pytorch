@@ -142,12 +142,49 @@ class AbstractTrainer(metaclass=ABCMeta):
             self.log_extra_val_info(log_data)
             self.logger_service.log_val(log_data)
 
+    def quantize_model(self, model):
+        print("Embedding histogram")
+        weights = model.bert.embedding.token.weight
+        print("Histogram min: ", torch.min(weights), " max: ", torch.max(weights))
+        print(torch.histc(weights, bins=256, min=torch.min(weights).item(), max=torch.max(weights).item()))
+
+        per_channel_weight_observer_range_neg_127_to_127 = torch.quantization.PerChannelMinMaxObserver.with_args(
+                    dtype=torch.qint8, qscheme=torch.per_channel_symmetric,
+                        quant_min=-127, quant_max=127, eps=2 ** -12)
+            
+        my_qconfig = torch.quantization.QConfig(
+                    activation=torch.quantization.default_placeholder_observer,
+                        weight=per_channel_weight_observer_range_neg_127_to_127)
+
+        model.bert.embedding.qconfig = my_qconfig #float_qparams_weight_only_qconfig
+        print("Preparing quantized model...")
+        torch.quantization.prepare(model, inplace=True)
+
+        print("Quantized -----------")
+        print(model)
+
+        print("Converting...")
+        torch.quantization.convert(model, inplace=True)
+
+        print("Quantization complete")
+        print(model)
+
+        print("Quantized Embedding Histogram")
+        weights = model.bert.embedding.token.weight().int_repr().to(torch.float32)
+        print("Histogram min: ", torch.min(weights), " max: ", torch.max(weights))
+        print(torch.histc(weights, bins=256, min=torch.min(weights).item(), max=torch.max(weights).item()))
+
     def test(self):
         print('Test best model with test set!')
 
         best_model = torch.load(os.path.join(self.export_root, 'models', 'best_acc_model.pth')).get('model_state_dict')
         self.model.load_state_dict(best_model)
         self.model.eval()
+
+        self.device = 'cpu'
+        self.model.to(self.device)
+
+        self.quantize_model(self.model)
 
         average_meter_set = AverageMeterSet()
 
